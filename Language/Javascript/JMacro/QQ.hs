@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TypeFamilies, TemplateHaskell, QuasiQuotes, RankNTypes, GADTs #-}
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, TypeFamilies, TemplateHaskell, QuasiQuotes, RankNTypes, GADTs #-}
 
 -----------------------------------------------------------------------------
 {- |
@@ -14,14 +14,12 @@ Simple EDSL for lightweight (untyped) programmatic generation of Javascript.
 
 module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM,parseJME) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
-import Control.Applicative hiding ((<|>),many,optional)
 import Control.Arrow(first)
 import Control.Monad.State.Strict
 import Data.Char(digitToInt, toLower, isUpper)
 import Data.List(isPrefixOf, sort)
 import Data.Generics(extQ,Data)
 import Data.Maybe(fromMaybe)
-import Data.Monoid
 import qualified Data.Map as M
 
 --import Language.Haskell.Meta.Parse
@@ -53,11 +51,11 @@ import Numeric(readHex)
 
 -- | QuasiQuoter for a block of JMacro statements.
 jmacro :: QuasiQuoter
-jmacro = QuasiQuoter {quoteExp = quoteJMExp, quotePat = quoteJMPat}
+jmacro = QuasiQuoter {quoteExp = quoteJMExp, quotePat = quoteJMPat, quoteType = error "No quoter for types provided", quoteDec = error "No quoter for declarations provided"}
 
 -- | QuasiQuoter for a JMacro expression.
 jmacroE :: QuasiQuoter
-jmacroE = QuasiQuoter {quoteExp = quoteJMExpE, quotePat = quoteJMPatE}
+jmacroE = QuasiQuoter {quoteExp = quoteJMExpE, quotePat = quoteJMPatE, quoteType = error "No quoter for types provided", quoteDec = error "No quoter for declarations provided"}
 
 quoteJMPat :: String -> TH.PatQ
 quoteJMPat s = case parseJM s of

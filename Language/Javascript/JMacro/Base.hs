@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, OverloadedStrings, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables, GADTs
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverloadedStrings, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables, GADTs
            , GeneralizedNewtypeDeriving, LambdaCase #-}
 
 -----------------------------------------------------------------------------
@@ -36,7 +36,6 @@ module Language.Javascript.JMacro.Base (
   jsSaturate, jtFromList, SaneDouble(..)
   ) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
-import Control.Applicative hiding (empty)
 import Control.Arrow ((***))
 import Control.Monad.State.Strict
 import Control.Monad.Identity
@@ -47,8 +46,6 @@ import qualified Data.Map as M
 import qualified Data.Text.Lazy as T
 import qualified Data.Text as TS
 import Data.Generics
-import Data.Monoid(Monoid, mappend, mempty)
-import Data.Semigroup(Semigroup(..))
 
 import Numeric(showHex)
 import Safe
@@ -223,22 +220,18 @@ class JMacro a where
 instance JMacro Ident where
     jtoGADT = JMGId
     jfromGADT (JMGId x) = x
-    jfromGADT _ = error "impossible"
 
 instance JMacro JStat where
     jtoGADT = JMGStat
     jfromGADT (JMGStat x) = x
-    jfromGADT _ = error "impossible"
 
 instance JMacro JExpr where
     jtoGADT = JMGExpr
     jfromGADT (JMGExpr x) = x
-    jfromGADT _ = error "impossible"
 
 instance JMacro JVal where
     jtoGADT = JMGVal
     jfromGADT (JMGVal x) = x
-    jfromGADT _ = error "impossible"
 
 -- | Union type to allow regular traversal by compos.
 data JMGadt a where
@@ -594,7 +587,7 @@ instance JsToDoc JType where
     jsToDoc (JTMap t) = text "Map" <+> ppType t
     jsToDoc (JTRecord t mp) = braces (fillSep . punctuate comma . map (\(x,y) -> text (T.pack x) <+> text "::" <+> jsToDoc y) $ M.toList mp) <+> text "[" <> jsToDoc t <> text "]"
     jsToDoc (JTFree ref) = ppRef ref
-    jsToDoc (JTRigid ref cs) = text "[" <> ppRef ref <> text "]"
+    jsToDoc (JTRigid ref _) = text "[" <> ppRef ref <> text "]"
 {-
         maybe (text "") (text " / " <>)
                   (ppConstraintList . map (\x -> (ref,x)) $ S.toList cs) <>

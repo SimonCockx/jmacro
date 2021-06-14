@@ -3,7 +3,6 @@ module Language.Javascript.JMacro.Types (
   JType(..), Constraint(..), JLocalType, VarRef, anyType, parseType, runTypeParser
   ) where
 
-import Control.Applicative hiding ((<|>))
 import Data.Char
 
 import Data.Maybe(fromMaybe)
@@ -78,8 +77,8 @@ lexeme    = P.lexeme lexer
 parseType :: String -> Either ParseError JType
 parseType s = runParser anyType (0,M.empty) "" s
 
-parseConstrainedType :: String -> Either ParseError JLocalType
-parseConstrainedType s = runParser constrainedType (0,M.empty) "" s
+-- parseConstrainedType :: String -> Either ParseError JLocalType
+-- parseConstrainedType s = runParser constrainedType (0,M.empty) "" s
 
 runTypeParser :: CharParser a JLocalType
 runTypeParser = withLocalState (0,M.empty) (try (parens constrainedType) <|> constrainedType) -- anyType

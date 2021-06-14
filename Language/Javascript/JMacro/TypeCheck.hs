@@ -11,7 +11,7 @@ import Control.Monad.Identity
 import Control.Monad.State
 import Control.Monad.Reader
 import Control.Monad.Writer
-import Control.Monad.Error
+import Control.Monad.Except
 import Data.Either
 import Data.Map (Map)
 import Data.Maybe(catMaybes)
@@ -95,7 +95,7 @@ data TCState = TCS {tc_env :: [Map Ident JType],
                     tc_context :: [TMonad String]}
 
 instance Show TCState where
-    show (TCS env vars stack frozen varCt cxt) =
+    show (TCS env vars stack frozen varCt _) =
         "env: " ++ show env ++ "\n" ++
         "vars: " ++ show vars ++ "\n" ++
         "stack: " ++ show stack ++ "\n" ++
@@ -105,7 +105,7 @@ instance Show TCState where
 tcStateEmpty :: TCState
 tcStateEmpty = TCS [M.empty] M.empty [S.empty] S.empty 0 []
 
-newtype TMonad a = TMonad (ErrorT String (State TCState) a) deriving (Functor, Monad, MonadState TCState, MonadError String)
+newtype TMonad a = TMonad (ExceptT String (State TCState) a) deriving (Functor, Monad, MonadState TCState, MonadError String)
 
 instance Applicative TMonad where
     pure = return
@@ -115,10 +115,10 @@ class JTypeCheck a where
     typecheck :: a -> TMonad JType
 
 evalTMonad :: TMonad a -> Either String a
-evalTMonad (TMonad x) = evalState (runErrorT x) tcStateEmpty
+evalTMonad (TMonad x) = evalState (runExceptT x) tcStateEmpty
 
 runTMonad :: TMonad a -> (Either String a, TCState)
-runTMonad (TMonad x) = runState (runErrorT x) tcStateEmpty
+runTMonad (TMonad x) = runState (runExceptT x) tcStateEmpty
 
 withContext :: TMonad a -> TMonad String -> TMonad a
 withContext act cxt = do
@@ -170,8 +170,8 @@ freeVarsWithNames x =
       fromC (Sub t) = t
       fromC (Super t) = t
 
-      intsToNames x = fmap (either id go) x
-          where go i = mkUnique (S.fromList $ lefts $ M.elems x) (int2Name i) 0
+      intsToNames y = fmap (either id go') y
+          where go' i = mkUnique (S.fromList $ lefts $ M.elems y) (int2Name i) 0
                 int2Name i | q == 0 = [letter]
                            | otherwise = letter : show q
                     where (q,r) = divMod i 26
@@ -283,7 +283,7 @@ partitionCs (Super t:cs) = (subs,t:sups)
 
 --add mutation
 lookupConstraintsList :: VarRef -> TMonad [Constraint]
-lookupConstraintsList vr@(_,ref) = do
+lookupConstraintsList (_,ref) = do
     vars <- tc_vars <$> get
     case M.lookup ref vars of
       (Just (SVConstrained cs)) -> filter notLoop . nub <$> mapM (mapConstraint resolveType) (S.toList cs)
@@ -326,15 +326,15 @@ addConstraint vr@(_,ref) c = case c of
        Sub t -> case t of
                   JTFree _ -> addC c
 
-                  JTForall vars t -> normalizeConstraints . (c : ) =<< lookupConstraintsList vr
+                  JTForall _ _ -> normalizeConstraints . (c : ) =<< lookupConstraintsList vr
 
                   JTFunc args res -> do
                          mapM_ (occursCheck ref) (res:args)
                          normalizeConstraints . (c :) =<< lookupConstraintsList vr
 
-                  JTRecord t m -> occursCheck ref t >>
+                  JTRecord t' m -> occursCheck ref t' >>
                                   F.mapM_ (occursCheck ref) m >>
-                                  addRecConstraint (Left (m,t))
+                                  addRecConstraint (Left (m,t'))
 
                   JTList t' -> do
                          vr' <- newVarRef
@@ -361,15 +361,15 @@ addConstraint vr@(_,ref) c = case c of
        Super t -> case t of
                   JTFree _ -> addC c
 
-                  JTForall vars t -> normalizeConstraints . (c : ) =<< lookupConstraintsList vr
+                  JTForall _ _ -> normalizeConstraints . (c : ) =<< lookupConstraintsList vr
 
                   JTFunc args res -> do
                          mapM_ (occursCheck ref) (res:args)
                          normalizeConstraints . (c :) =<< lookupConstraintsList vr
 
-                  JTRecord t m -> occursCheck ref t >>
+                  JTRecord t' m -> occursCheck ref t' >>
                                   F.mapM_ (occursCheck ref) m >>
-                                  addRecConstraint (Right (m,t))
+                                  addRecConstraint (Right (m,t'))
 
                   JTList t' -> do
                          vr' <- newVarRef
@@ -579,19 +579,19 @@ tryCloseFrozenVars = runReaderT (loop . tc_frozen =<< get) []
       unifyGroup (vr:vrs) = lift $ mapM_ (\x -> instantiateVarRef (Nothing, x) (JTFree (Nothing,vr))) vrs
       unifyGroup [] = return ()
 
-      findLoop i cs@(c:_) = go [] cs
+      findLoop i cs@(c:_) = go'' [] cs
           where
             cTyp = eitherIsLeft c
-            go accum (r:rs)
+            go'' accum (r:rs)
                | either id id r == i && eitherIsLeft r == cTyp = Just $ Just (either id id r : accum)
                   -- i.e. there's a cycle to close
                | either id id r == i = Just Nothing
                   -- i.e. there's a "dull" cycle
                | eitherIsLeft r /= cTyp = Nothing -- we stop looking for a cycle because the chain is broken
-               | otherwise = go (either id id r : accum) rs
-            go _ [] = Nothing
+               | otherwise = go'' (either id id r : accum) rs
+            go'' _ [] = Nothing
 
-      findLoop i [] = Nothing
+      findLoop _ [] = Nothing
 
       tryClose vr@(_,i) = do
         cl <- lift$ cannonicalizeConstraints =<< lookupConstraintsList vr
@@ -657,10 +657,13 @@ resolveTypeGen f typ = go typ
       checkRef x@(_, ref) = do
         vars <- tc_vars <$> get
         case M.lookup ref vars of
-          Just (SVType t) -> return Nothing
+          Just (SVType _) -> return Nothing
           _ -> return $ Just x
 
+resolveType :: JType -> TMonad JType
 resolveType = resolveTypeGen composOpM1
+
+resolveTypeShallow :: JType -> TMonad JType
 resolveTypeShallow = resolveTypeGen (const return)
 
 --TODO create proper bounds for records
@@ -726,7 +729,7 @@ instantiateRigidScheme vrs t = evalStateT (go t) M.empty
     where
       schemeVars = S.fromList $ map snd vrs
       go :: JType -> StateT (Map Int JType) TMonad JType
-      go (JTFree vr@(mbName, ref))
+      go (JTFree vr@(_, ref))
           | ref `S.member` schemeVars = do
                        m <- get
                        case M.lookup ref m of
@@ -742,8 +745,8 @@ checkEscapedVars :: [VarRef] -> JType -> TMonad ()
 checkEscapedVars vrs t = go t
     where
       vs = S.fromList $ map snd vrs
-      go t@(JTRigid (_,ref) _)
-          | ref `S.member` vs = tyErr1 "Qualified var escapes into environment" t
+      go t'@(JTRigid (_,ref) _)
+          | ref `S.member` vs = tyErr1 "Qualified var escapes into environment" t'
           | otherwise = return ()
       go x = composOpM1_ go x
 
@@ -756,9 +759,9 @@ x <: y = do
      if xt == yt
         then return ()
         else go xt yt `withContext` (do
-                                      xt <- prettyType x
-                                      yt <- prettyType y
-                                      return $ "When applying subtype constraint: " ++ xt ++ " <: " ++ yt)
+                                      xt' <- prettyType x
+                                      yt' <- prettyType y
+                                      return $ "When applying subtype constraint: " ++ xt' ++ " <: " ++ yt')
   where
 
     go _ JTStat = return ()
@@ -773,7 +776,7 @@ x <: y = do
     --above or below jtfrees ?
 
     -- v <: \/ a. t --> v <: t[a:=x], x not in conclusion
-    go xt yt@(JTForall vars t) = do
+    go xt (JTForall vars t) = do
            t' <- instantiateRigidScheme vars t
            go xt t'
            checkEscapedVars vars =<< resolveType xt
@@ -802,7 +805,7 @@ someUpperBound :: [JType] -> TMonad JType
 someUpperBound [] = return JTStat
 someUpperBound xs = do
   res <- newTyVar
-  b <- (mapM_ (<: res) xs >> return True) `catchError` \e -> return False
+  b <- (mapM_ (<: res) xs >> return True) `catchError` \_ -> return False
   if b then return res else return JTStat
 
 someLowerBound :: [JType] -> TMonad JType
@@ -827,7 +830,7 @@ instance JTypeCheck JExpr where
     typecheck (SelExpr e (StrI i)) =
         do et <- typecheck e
            case et of
-             (JTRecord t m) -> case M.lookup i m of
+             (JTRecord _ m) -> case M.lookup i m of
                                Just res -> return res
                                Nothing -> tyErr1 ("Record contains no field named " ++ show i) et -- record extension would go here
              (JTFree r) -> do
@@ -835,7 +838,7 @@ instance JTypeCheck JExpr where
                             addConstraint r (Sub (JTRecord res (M.singleton i res)))
                             return res
              _ -> tyErr1 "Cannot use record selector on this value" et
-    typecheck (IdxExpr e e1) = undefined --this is tricky
+    typecheck (IdxExpr _ _) = undefined --this is tricky
     typecheck (InfixExpr s e e1)
         | s `elem` ["-","/","*"] = setFixed JTNum >> return JTNum
         | s == "+" = setFixed JTNum >> return JTNum -- `orElse` setFixed JTStr --TODO: Intersection types
@@ -863,7 +866,7 @@ instance JTypeCheck JExpr where
                             typecheck e <<:> return JTBool
                             join $ liftA2 (\x y -> someUpperBound [x,y]) (typecheck e1) (typecheck e2)
 
-    typecheck (NewExpr e) = undefined --yipe
+    typecheck (NewExpr _) = undefined --yipe
 
     --when we instantiate a scheme, all the elements of the head
     --that are not in the tail are henceforth unreachable and can be closed
@@ -939,7 +942,7 @@ instance JTypeCheck JStat where
                             typecheck e <<:> return JTBool
                             typecheck s
     typecheck (ForInStat _ _ _ _) = undefined -- yipe!
-    typecheck (SwitchStat e xs d) = undefined -- check e, unify e with firsts, check seconds, take glb of seconds
+    typecheck (SwitchStat _ _ _) = undefined -- check e, unify e with firsts, check seconds, take glb of seconds
                                     --oh, hey, add typecase to language!?
     typecheck (TryStat _ _ _ _) = undefined -- should be easy
     typecheck (BlockStat xs) = do
@@ -957,6 +960,8 @@ instance JTypeCheck JStat where
     typecheck (AntiStat _) = undefined --oyvey
     typecheck (BreakStat _) = return JTStat
     typecheck (ForeignStat i t) = integrateLocalType t >>= addEnv i >> return JTStat
+    typecheck (LabelStat _ _) = undefined
+    typecheck (ContinueStat _) = undefined
 
 typecheckWithBlock :: (JsToDoc a, JMacro a, JTypeCheck a) => a -> TMonad JType
 typecheckWithBlock stat = typecheck stat `withContext` (return $ "In statement: " ++ (T.unpack . displayT . renderCompact $ renderJs stat))
